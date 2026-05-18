@@ -1,0 +1,14 @@
+## Visual Studio / .NET artifacts
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.userosscache
+*.suo
+
+## Azure Functions local settings (contains secrets)
+**/local.settings.json
+
+## OS / editor
+.DS_Store
+Thumbs.db
