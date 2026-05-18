@@ -1,6 +1,7 @@
 using Azure.Data.Tables;
 using Azure.Identity;
 using Azure.Provisioning.Engine.Fulfillment;
+using Azure.Provisioning.Engine.Metering;
 using Azure.Provisioning.Engine.Notifications;
 using Azure.Provisioning.Engine.Saas;
 using Microsoft.Azure.Functions.Worker;
@@ -41,6 +42,10 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<SaasWebhookAuthenticator>();
 builder.Services.AddSingleton<SaasWebhookDispatcher>();
 builder.Services.AddHttpClient<SaasFulfillmentClient>();
+
+// Marketplace metered billing.
+builder.Services.AddHttpClient<MarketplaceMeteringClient>();
+builder.Services.AddSingleton<MeteringService>();
 
 var app = builder.Build();
 

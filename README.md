@@ -8,7 +8,10 @@ endpoints used by Microsoft commercial marketplace integrations:
 2. **SaaS Fulfillment Webhooks** – Marketplace SaaS subscription events as
    documented in [Implementing a webhook on the SaaS service](https://learn.microsoft.com/partner-center/marketplace-offers/pc-saas-fulfillment-webhook).
 
-Both endpoints persist state in **Azure Storage Tables**.
+It also ships an in-memory **Metered Billing** aggregator that batches usage
+toward the [Marketplace metered billing APIs](https://learn.microsoft.com/partner-center/marketplace-offers/marketplace-metering-service-apis).
+
+Both webhook endpoints persist state in **Azure Storage Tables**.
 
 ## Endpoints
 
@@ -16,6 +19,10 @@ Both endpoints persist state in **Azure Storage Tables**.
 | --- | --- | --- |
 | Managed App notifications | `POST /api/notifications/resource` | Azure Resource Manager |
 | SaaS fulfillment webhook  | `POST /api/saas/webhook`           | Microsoft Marketplace |
+| Metering – record usage   | `POST /api/metering/record`        | Your application |
+| Metering – flush buffer   | `POST /api/metering/flush`         | Operations |
+| Metering – inspect buffer | `GET  /api/metering/pending`       | Operations |
+| Metering – timer flush    | `0 */5 * * * *`                    | Functions runtime |
 
 ## Managed Application notifications
 
@@ -79,6 +86,46 @@ Both endpoints persist state in **Azure Storage Tables**.
 | `Saas:Fulfillment:ApiVersion` | Defaults to `2018-08-31`. |
 | `Saas:Fulfillment:Resource` | Marketplace resource id. Default: `62d94f6c-d599-489b-a797-3e10e42fbe22`. |
 
+### Metered billing
+
+| Key | Description |
+| --- | --- |
+| `Metering:BaseAddress` | Defaults to `https://marketplaceapi.microsoft.com`. |
+| `Metering:ApiVersion` | Defaults to `2018-08-31`. |
+| `Metering:Resource` | Marketplace API resource id. Default: `20e940b3-4c77-4b0b-9a53-9e16a1b010a7`. |
+| `Metering:Aad:TenantId` / `Metering:Aad:ClientId` / `Metering:Aad:ClientSecret` | Optional override of the credentials used to call the metering API. Falls back to the `Saas:Aad:*` values, then to `DefaultAzureCredential` (e.g. Managed Identity). |
+
+## Metered billing
+
+The `MeteringService` aggregates usage in memory by
+`(resource, dimension, planId, calendar-hour)` – which matches the metering
+API's constraint that only one event per hour and resource is allowed.
+Buffered events are flushed:
+
+- Manually via `POST /api/metering/flush`.
+- Automatically every 5 minutes by `metering-timer-flush`.
+
+Quantities for the same hour are summed; expired buckets (>24h old) are
+discarded; duplicates returned by the API are treated as success. Failures
+re-queue the affected events for the next flush.
+
+> **Note** – Only usage *above* the plan's included base fee should be
+> recorded. The metering API itself does not perform that subtraction.
+
+```csharp
+public class WidgetService(MeteringService metering)
+{
+    public void OnWidgetProcessed(string subscriptionId, string planId)
+    {
+        metering.Record(
+            resource: subscriptionId,        // SaaS subscriptionId or Managed App resourceUsageId
+            dimension: "widgetsProcessed",
+            planId: planId,
+            quantity: 1.0);
+    }
+}
+```
+
 ## Run locally
 
 ```powershell
@@ -127,5 +174,22 @@ Invoke-RestMethod -Method Post `
   -ContentType 'application/json' `
   -Headers @{ Authorization = 'Bearer <jwt>' } `
   -Body $body
+```
+
+Record a metering event and flush:
+
+```powershell
+$record = @{
+  resource     = '11111111-2222-3333-4444-555555555555'
+  resourceKind = 'ResourceId'
+  dimension    = 'widgetsProcessed'
+  planId       = 'silver'
+  quantity     = 3
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri 'http://localhost:7071/api/metering/record' `
+  -ContentType 'application/json' -Body $record
+
+Invoke-RestMethod -Method Post -Uri 'http://localhost:7071/api/metering/flush'
 ```
 
